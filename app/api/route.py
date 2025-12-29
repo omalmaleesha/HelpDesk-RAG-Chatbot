@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Query
+
+from app.core.llm import generate_answer
 from ..core.document_service import load_and_chunk_documents
 from ..core.embeddings import get_embedding_model
 from ..db.chromaDB import get_chroma_client, get_chroma_collection, get_vector_store
+from ..core.reranker import Reranker
 import uuid
 from openai import OpenAI
 import os
@@ -11,6 +14,7 @@ import json
 from groq import Groq
 
 router = APIRouter()
+reranker = Reranker()
 
 load_dotenv()  
 
@@ -49,93 +53,69 @@ def load_documents():
 
 @router.get("/documents/verify")
 def verify_documents():
-    embeddings = get_embedding_model()
+    collection = get_chroma_collection()
+    
+    all_docs = collection.get(include=["documents", "embeddings", "metadatas"])
 
-    # Load persisted LangChain vector store
-    vector_store = get_vector_store(embeddings)
-
-    # Access the underlying Chroma collection (read-only)
-    collection = vector_store._collection
-
-    all_docs = collection.get(
-        include=["documents", "metadatas", "embeddings"]
-    )
-
-    total_docs = len(all_docs.get("documents", []))
-
-    sample_docs = all_docs.get("documents", [])[:2]
-    sample_metadata = all_docs.get("metadatas", [])[:2]
-
-    # embeddings may be None if not requested
-    raw_vectors = all_docs.get("embeddings") or []
+    total_docs = len(all_docs["documents"])
+    sample_docs = all_docs["documents"][:2]
+    
+    # Safely get embeddings
+    raw_vectors = all_docs.get("embeddings", [])
     sample_vectors = [list(vec) for vec in raw_vectors[:2]]
+
+    sample_metadata = all_docs["metadatas"][:2]
 
     return {
         "status": "success",
-        "storage": "persistent",
-        "db_path": str(vector_store._persist_directory),
         "total_docs": total_docs,
         "sample_docs": sample_docs,
         "sample_vectors": sample_vectors,
-        "sample_metadata": sample_metadata,
+        "sample_metadata": sample_metadata
     }
 
 
 @router.get("/query")
 def query_documents(user_query: str = Query(..., description="Your search query")):
-    """
-    Search the Chroma collection for the most similar documents to the user query.
-    """
     embedding_model = get_embedding_model()
-    # Get the Chroma collection
-    # Load persisted LangChain vector store
-    vector_store = get_vector_store(embedding_model)
 
-    # Access the underlying Chroma collection (read-only)
+    # Load persisted Chroma DB
+    vector_store = get_vector_store(embedding_model)
     collection = vector_store._collection
 
-    # Embed the user query
+    # Embed query
     query_vector = embedding_model.embed_query(user_query)
 
-    # Query the collection (top 3 results)
+    # Retrieve MORE docs for reranking
     results = collection.query(
         query_embeddings=[query_vector],
-        n_results=3,
-        include=["documents", "metadatas", "distances"]
+        n_results=8,  # retrieve more for reranker
+        include=["documents", "metadatas"]
     )
 
-    top_docs = results["documents"][0] if results["documents"] else []
-    top_metas = results["metadatas"][0] if results["metadatas"] else []
+    docs = results["documents"][0] if results["documents"] else []
+    metas = results["metadatas"][0] if results["metadatas"] else []
 
-    # Step 4: Prepare context for LLM
-    context_text = "\n\n".join([f"{meta}: {doc}" for meta, doc in zip(top_metas, top_docs)])
-    prompt = (
-        f"Answer the following question based on the context below.\n\n"
-        f"Context:\n{context_text}\n\n"
-        f"Question: {user_query}\n\n"
-        f"Explain your reasoning step by step and then give the final answer."
-    )
+    # Store the original top 3 before rerank
+    top_before_rerank = docs[:3]
 
-    # Step 5: Call Groq LLM
+    # Apply reranker for top 3 results
+    reranked_docs = reranker.rerank(user_query, docs, top_k=3)
+
+    # Build context from reranked docs
+    context_text = "\n\n".join(reranked_docs)
+
+    # LLM call
     try:
-        completion = client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_completion_tokens=1024,
-            top_p=1
-        )
-
-        llm_answer = completion.choices[0].message.content
-
+        llm_answer = generate_answer(user_query, context_text)
     except Exception as e:
         llm_answer = f"Error calling LLM: {str(e)}"
 
     return {
         "query": user_query,
-        "top_documents": top_docs,
-        "top_metadatas": top_metas,
+        "retrieved_docs": len(docs),
+        "top_documents_before_rerank": top_before_rerank,
+        "top_documents_after_rerank": reranked_docs,
+        "top_metadatas": metas[:3],
         "llm_answer": llm_answer
     }
