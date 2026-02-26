@@ -115,12 +115,13 @@ def query_documents(user_query: str = Query(..., description="Your search query"
 
     # Automatic verification
     is_correct = verify_llm_answer(llm_answer, reranked_docs)
-    final_answer = llm_answer
     human_answer = None
 
     if not is_correct:
-    # Send to human agent for correction
-        human_answer = send_to_human_agent(user_query, llm_answer)
+        # Block until human agent responds (no timeout). Adjust timeout in send_to_human_agent if needed.
+        human_answer = send_to_human_agent(user_query, llm_answer, timeout=None)
+
+    final_answer = human_answer or llm_answer
 
     return {
         "query": user_query,
