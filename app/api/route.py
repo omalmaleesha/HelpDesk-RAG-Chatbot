@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 import requests
 import json
 from groq import Groq
+from ..utils.validations import verify_llm_answer
+from ..agents.human_agent import send_to_human_agent
 
 router = APIRouter()
 reranker = Reranker()
@@ -111,11 +113,23 @@ def query_documents(user_query: str = Query(..., description="Your search query"
     except Exception as e:
         llm_answer = f"Error calling LLM: {str(e)}"
 
+    # Automatic verification
+    is_correct = verify_llm_answer(llm_answer, reranked_docs)
+    final_answer = llm_answer
+    human_answer = None
+
+    if not is_correct:
+    # Send to human agent for correction
+        human_answer = send_to_human_agent(user_query, llm_answer)
+
     return {
         "query": user_query,
         "retrieved_docs": len(docs),
         "top_documents_before_rerank": top_before_rerank,
         "top_documents_after_rerank": reranked_docs,
         "top_metadatas": metas[:3],
-        "llm_answer": llm_answer
+        "llm_answer": llm_answer,
+        "final_answer": final_answer,
+        "human_answer": human_answer,
+        "verified_correct": is_correct
     }
