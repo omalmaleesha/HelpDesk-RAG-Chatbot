@@ -26,6 +26,11 @@ export default function Home() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ragStatus, setRagStatus] = useState<"unknown" | "ok" | "down">("unknown");
+  const [showPendingOnly, setShowPendingOnly] = useState(false);
+  const [selectedManually, setSelectedManually] = useState(false);
+
+  const POLL_INTERVAL_MS = 5000;
+  const HEALTH_INTERVAL_MS = 10000;
 
   const selected = useMemo(
     () => escalations.find((e) => e.id === selectedId) ?? escalations[0],
@@ -35,21 +40,30 @@ export default function Home() {
   useEffect(() => {
     fetchEscalations();
     checkRagHealth();
-    const id = setInterval(fetchEscalations, 5000);
-    const healthId = setInterval(checkRagHealth, 10000);
+    const id = setInterval(fetchEscalations, POLL_INTERVAL_MS);
+    const healthId = setInterval(checkRagHealth, HEALTH_INTERVAL_MS);
     return () => {
       clearInterval(id);
       clearInterval(healthId);
     };
   }, []);
 
+  // Auto-select first item on initial load; don't override manual selection
+  useEffect(() => {
+    if (!selectedManually && escalations.length > 0 && !selectedId) {
+      setSelectedId(escalations[0].id);
+    }
+  }, [escalations, selectedId, selectedManually]);
+
+  // When selection changes, seed form from server. Avoid clobbering user typing on every poll.
   useEffect(() => {
     if (selected) {
-      setSelectedId(selected.id);
       setCorrectedAnswer(selected.correctedAnswer ?? "");
       setNotes(selected.notes ?? "");
     }
-  }, [selected]);
+    // We intentionally only depend on the selected id to avoid clobbering user edits on every poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
 
   async function fetchEscalations() {
     try {
@@ -80,13 +94,46 @@ export default function Home() {
     setIsSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/escalations/${selected.id}`, {
+      // Ensure the escalation exists (helps avoid 404 if server memory was reset)
+      const upsertRes = await fetch(`/api/escalations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: selected.id,
+          userQuery: selected.userQuery,
+          aiAnswer: selected.aiAnswer,
+          references: selected.references,
+          similarity: selected.similarity,
+          threshold: selected.threshold,
+          status: selected.status,
+        }),
+      });
+
+      if (!upsertRes.ok) {
+        const body = await upsertRes.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to upsert escalation before patching");
+      }
+
+      const upsertBody = await upsertRes.json().catch(() => ({}));
+      const upsertedId = upsertBody?.escalation?.id || selected.id;
+
+      // If the backend generated a new id, update selection to match
+      if (upsertedId !== selected.id) {
+        setSelectedId(upsertedId);
+      }
+
+      const res = await fetch(`/api/escalations/${upsertedId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           correctedAnswer,
           notes,
           status: "answered",
+          userQuery: selected.userQuery,
+          aiAnswer: selected.aiAnswer,
+          references: selected.references,
+          similarity: selected.similarity,
+          threshold: selected.threshold,
         }),
       });
 
@@ -104,6 +151,13 @@ export default function Home() {
     }
   }
 
+  const pendingCount = useMemo(() => escalations.filter((e) => e.status === "pending").length, [escalations]);
+
+  const filteredEscalations = useMemo(() => {
+    const list = showPendingOnly ? escalations.filter((e) => e.status === "pending") : escalations;
+    return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }, [escalations, showPendingOnly]);
+
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900">
       <header className="border-b border-zinc-200 bg-white px-6 py-4 shadow-sm">
@@ -120,7 +174,7 @@ export default function Home() {
             >
               Refresh
             </button>
-        </div>
+          </div>
         </div>
       </header>
 
@@ -128,15 +182,29 @@ export default function Home() {
         <section className="w-full md:w-1/2">
           <div className="flex items-center justify-between pb-2">
             <h2 className="text-sm font-semibold text-zinc-700">Incoming</h2>
-            <span className="text-xs text-zinc-500">{escalations.length} items</span>
+            <div className="flex items-center gap-3 text-xs text-zinc-500">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
+                  checked={showPendingOnly}
+                  onChange={(e) => setShowPendingOnly(e.target.checked)}
+                />
+                <span>Pending only ({pendingCount})</span>
+              </label>
+              <span>{filteredEscalations.length} shown</span>
+            </div>
           </div>
           <div className="space-y-3">
-            {escalations.map((item) => {
+            {filteredEscalations.map((item) => {
               const isActive = item.id === selected?.id;
               return (
                 <button
                   key={item.id}
-                  onClick={() => setSelectedId(item.id)}
+                  onClick={() => {
+                    setSelectedManually(true);
+                    setSelectedId(item.id);
+                  }}
                   className={`w-full rounded-lg border p-4 text-left shadow-sm transition hover:border-indigo-300 hover:shadow ${
                     isActive ? "border-indigo-400 ring-2 ring-indigo-100" : "border-zinc-200"
                   }`}
@@ -154,7 +222,7 @@ export default function Home() {
                 </button>
               );
             })}
-            {escalations.length === 0 && (
+            {filteredEscalations.length === 0 && (
               <div className="rounded-lg border border-dashed border-zinc-200 p-6 text-center text-sm text-zinc-500">
                 Waiting for escalations...
               </div>
