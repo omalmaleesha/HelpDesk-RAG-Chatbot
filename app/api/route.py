@@ -3,6 +3,7 @@ from fastapi import APIRouter, Query
 from app.core.llm import generate_answer
 from ..core.document_service import load_and_chunk_documents
 from ..core.embeddings import get_embedding_model
+from ..core.semantic_cache import check_semantic_cache, add_to_semantic_cache
 from ..db.chromaDB import get_chroma_client, get_chroma_collection, get_vector_store
 from ..core.reranker import Reranker
 import uuid
@@ -88,6 +89,23 @@ def query_documents(user_query: str = Query(..., description="Your search query"
     # Embed query
     query_vector = embedding_model.embed_query(user_query)
 
+    # semantic cache check
+    cache_hit, cached_answer = check_semantic_cache(query_vector)
+    if cache_hit and cached_answer:
+        return {
+            "query": user_query,
+            "retrieved_docs": 0,
+            "top_documents_before_rerank": [],
+            "top_documents_after_rerank": [],
+            "top_metadatas": [],
+            "llm_answer": cached_answer,
+            "final_answer": cached_answer,
+            "human_answer": None,
+            "verified_correct": True,
+            "source": "semantic_cache"
+        }
+
+
     # Retrieve MORE docs for reranking
     results = collection.query(
         query_embeddings=[query_vector],
@@ -122,6 +140,9 @@ def query_documents(user_query: str = Query(..., description="Your search query"
         human_answer = send_to_human_agent(user_query, llm_answer, timeout=None)
 
     final_answer = human_answer or llm_answer
+
+    # store query + answer for future cache hits
+    add_to_semantic_cache(query_vector, final_answer)
 
     return {
         "query": user_query,
