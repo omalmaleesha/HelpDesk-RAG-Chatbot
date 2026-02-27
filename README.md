@@ -1,5 +1,7 @@
 # HelpDesk RAG Chatbot
 
+![System Architecture](images/diagram.png)
+
 FastAPI-based Retrieval-Augmented Generation (RAG) service that ingests local PDFs/TXT files, stores embeddings in Chroma, reranks results, and answers queries with Groq-hosted LLMs. Swagger UI is exposed at `http://127.0.0.1:8000/docs` for quick testing.
 
 ## Tech stack
