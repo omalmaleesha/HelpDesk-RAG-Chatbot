@@ -1,16 +1,56 @@
 # HelpDesk RAG Chatbot
 
+> **Repository:** https://github.com/omalmaleesha/HelpDesk-RAG-Chatbot
+
 ![System Architecture](images/diagram.png)
 
-FastAPI-based Retrieval-Augmented Generation (RAG) service that ingests local PDFs/TXT files, stores embeddings in Chroma, reranks results, and answers queries with Groq-hosted LLMs. Swagger UI is exposed at `http://127.0.0.1:8000/docs` for quick testing.
+## Project Idea
+
+HelpDesk RAG Chatbot is an AI-powered support assistant built on the **Retrieval-Augmented Generation (RAG)** pattern. Instead of relying on a language model's baked-in knowledge alone, the system first retrieves the most relevant passages from your own document library (PDFs and plain-text files) and then feeds those passages as grounded context to a large language model to produce accurate, source-aware answers.
+
+The core workflow is:
+1. **Ingest** – upload your support documents (policies, manuals, FAQs) to the `storage/` folder and call `/documents/load` to chunk, embed, and persist them in a local ChromaDB vector store.
+2. **Retrieve** – when a user asks a question, the query is embedded and the top-8 most similar document chunks are fetched from ChromaDB.
+3. **Rerank** – a CrossEncoder model scores and reranks those candidates, keeping the top-3 highest-relevance passages.
+4. **Generate** – a Groq-hosted LLM (OpenAI-compatible endpoint) synthesises a final answer from the reranked context.
+5. **Verify & Escalate** – an automatic similarity check compares the answer against the context; if confidence is below the threshold the question is escalated to a human agent via a Next.js dashboard, which polls for a corrected answer and returns it to the user.
+6. **Cache** – answered queries are stored in an in-memory semantic cache so repeat or near-duplicate questions are served instantly without hitting the LLM or vector store again.
+
+## Features
+
+- **Document ingestion** – load `.pdf` and `.txt` files from `storage/`, split into overlapping chunks (size 500 / overlap 100), embed, and persist to on-disk ChromaDB.
+- **Semantic search** – cosine-similarity vector retrieval powered by ChromaDB and LangChain-Chroma, returning the top-8 most relevant chunks per query.
+- **Cross-encoder reranking** – `cross-encoder/ms-marco-MiniLM-L-6-v2` reranks the retrieved candidates, selecting the top-3 for context.
+- **LLM answer generation** – Groq-hosted LLM (`openai/gpt-oss-120b`) generates a grounded answer from the reranked context.
+- **Automatic answer verification** – `all-MiniLM-L6-v2` sentence-transformer compares the LLM answer against the context; low-confidence answers are flagged for human review.
+- **Human-agent escalation** – low-confidence queries are forwarded to a Next.js human-agent dashboard; the system polls until a corrected answer is submitted, then returns that to the user.
+- **Semantic cache** – in-memory cache stores query embeddings and answers; cosine similarity (threshold 0.92) serves cached answers for near-duplicate queries, skipping the LLM entirely.
+- **REST API with Swagger UI** – FastAPI exposes `/documents/load`, `/documents/verify`, `/query`, `/human-assist`, and `/human-assist/all`; interactive docs at `http://127.0.0.1:8000/docs`.
+- **CORS support** – configured to accept requests from the Next.js human-agent frontend running on `localhost:3000`.
+- **Human-agent dashboard** – a Next.js 15 / TypeScript / Tailwind CSS web app where support staff view escalated queries, provide corrected answers, and browse resolution history.
 
 ## Tech stack
-- **FastAPI** for the HTTP API and docs
-- **ChromaDB + LangChain-Chroma** for vector storage
-- **HuggingFace embeddings** (`sentence-transformers/all-MiniLM-L6-v2`) for encoding
-- **CrossEncoder reranker** (`cross-encoder/ms-marco-MiniLM-L-6-v2`) for re-ranking top results
-- **Groq LLM (OpenAI-compatible endpoint)** for answer generation (`openai/gpt-oss-120b`)
-- **Python 3.12**, `python-dotenv` for env vars, `pypdf` for PDF parsing
+
+### Backend (Python 3.12)
+| Layer | Technology |
+|---|---|
+| API framework | **FastAPI** (Swagger UI at `/docs`) |
+| Vector store | **ChromaDB** + **LangChain-Chroma** (on-disk persistence) |
+| Embeddings | **HuggingFace** `sentence-transformers/all-MiniLM-L6-v2` |
+| Reranker | **CrossEncoder** `cross-encoder/ms-marco-MiniLM-L-6-v2` |
+| LLM | **Groq** OpenAI-compatible endpoint (`openai/gpt-oss-120b`) |
+| Answer verification | **SentenceTransformer** cosine-similarity check |
+| Semantic cache | In-memory cosine-similarity cache (threshold 0.92) |
+| Document parsing | **pypdf** (PDF), built-in file I/O (TXT) |
+| Environment | **python-dotenv**, **uv** (package/lock management) |
+
+### Human-Agent Frontend (Next.js)
+| Layer | Technology |
+|---|---|
+| Framework | **Next.js 15** (App Router) |
+| Language | **TypeScript** |
+| Styling | **Tailwind CSS** |
+| API routes | Next.js Route Handlers (REST escalation endpoints) |
 
 ## Prerequisites
 - Python 3.12+
