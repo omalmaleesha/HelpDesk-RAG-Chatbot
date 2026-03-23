@@ -79,6 +79,22 @@ uvicorn app.main:app --reload
 ```
 Then open Swagger UI: http://127.0.0.1:8000/docs
 
+### Human agent / chat UI (Next.js)
+If you want a simple front-end for document load/verify and a WhatsApp-style chat against `/query`:
+
+```powershell
+# In another shell from repo root
+cd human-agent
+npm install
+npm run dev
+```
+
+Set `NEXT_PUBLIC_RAG_BASE_URL` if your FastAPI server isn’t on `http://127.0.0.1:8000`.
+
+- **Documents**: triggers `/documents/load` and `/documents/verify`
+- **Query**: runs the hybrid retrieval `/query?user_query=...`
+- **Chat**: WhatsApp-like interface hitting `/query`, shows loading on send
+
 ## How to use via Swagger UI (http://127.0.0.1:8000/docs)
 1) **Health check**: `GET /` → returns `{"message": "Hello RAG"}`
 2) **Load documents**: `GET /documents/load`
