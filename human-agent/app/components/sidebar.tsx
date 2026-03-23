@@ -12,6 +12,9 @@ type SidebarProps = {
 const navItems = [
   { href: "/", label: "Escalations" },
   { href: "/history", label: "History" },
+  { href: "/documents", label: "Documents" },
+  { href: "/query", label: "Query" },
+  { href: "/chat", label: "Chat" },
 ];
 
 export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
